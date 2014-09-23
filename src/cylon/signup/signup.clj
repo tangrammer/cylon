@@ -7,7 +7,7 @@
    [clojure.tools.logging :refer :all]
    [cylon.authentication :refer (InteractionStep get-location step-required?)]
    [cylon.session :refer (session respond-with-new-session! assoc-session-data!)]
-   [cylon.token-store :refer (create-token! get-token-by-id)]
+   [cylon.token-store :refer (create-token! get-token-by-id purge-token!)]
    [cylon.oauth.client-registry :refer (lookup-client+)]
    [com.stuartsierra.component :as component]
    [modular.bidi :refer (WebService path-for)]
@@ -132,8 +132,10 @@
              (if-let [[email code] [ (get params "email") (get params "code")]]
                (if-let [store (get-token-by-id (:verification-code-store this) code)]
                  (if (= email (:email store))
-                   (do (user-email-verified! (:user-domain this) (:name store))
-                       (format "Thanks, Your email '%s'  has been verified correctly " email))
+                   (do
+                     (purge-token! (:verification-code-store this) code)
+                     (user-email-verified! (:user-domain this) (:name store))
+                     (format "Thanks, Your email '%s'  has been verified correctly " email))
                    (format "Sorry but your session associated with this email '%s' seems to not be logic" email))
                  (format "Sorry but your session associated with this email '%s' seems to not be valid" email))
 
@@ -153,7 +155,7 @@
                      ;; TODO: we should to check about expiry time of this code
 
                      ;; theoretically we reach to this step from login page so we have a server-session
-                     (assoc-session-data! session-store req {:reset-code-identity (:name store)})
+                     (assoc-session-data! session-store req {:reset-code-identity (:name store) :verification-code code})
                        {:status 200
                         :body (render-reset-password
                                renderer req
@@ -210,12 +212,13 @@
      ::confirm-password
      (fn [req]
        (if-let [identity (:reset-code-identity (session session-store req))]
-        ;;TODO:  remove token from store??
+
          (let [form (-> req params-request :form-params)
                pw (get form "new_pw")
                pw-bis (get form "new_pw_bis")]
            (if (= pw pw-bis)
              (do
+               (purge-token! (:verification-code-store this) (:verification-code (session session-store req)))
                (reset-password! user-domain identity pw)
                (response (render-email-verified renderer req {:message "You are like a hero, successful result"
                                                               :header "Reset Password Process"} )))
