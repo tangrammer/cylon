@@ -19,3 +19,7 @@
                 (comp #(get % "host") :headers)
                 :uri)
           req)))
+
+(defn get-original-uri [req]
+  (str (:uri req)
+       (when-let [qs (:query-string req)] (when (not-empty qs) (str "?" qs )))))

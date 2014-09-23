@@ -4,6 +4,7 @@
   (:require
    [ring.middleware.cookies :refer (cookies-request cookies-response)]
    [cylon.session.protocols :as p]
+   [cylon.util :refer (absolute-uri)]
    [schema.core :as s]))
 
 ;; Old functions here
@@ -56,3 +57,26 @@
 
 #_(defn get-session-value [request cookie-name session-store k]
     (get (get-session-from-cookie request cookie-name session-store) k))
+
+
+
+(defn wrap-require-session
+  [h session-store should-exist-session?]
+  (fn [req]
+    (let [session (session session-store req)]
+      (if-not session
+        (if should-exist-session?
+          ;; TODO: it should be better to redirect to /home ???
+          (throw (Exception. (format "should exist-session in: %s"
+                                     (absolute-uri req))))
+          (let [response (h req)
+                session-data (:cylon-session-data response)]
+            (respond-with-new-session! session-store req (or session-data {}) response)))
+        (let [req-with-session (assoc req :session session)
+              response (h req-with-session)]
+          (when-let [session-data (:cylon-session-data response)]
+            (assoc-session-data! session-store req session-data))
+          response)))))
+
+(defn response-with-data-session [response session-state]
+  (merge {:cylon-session-data session-state} response))

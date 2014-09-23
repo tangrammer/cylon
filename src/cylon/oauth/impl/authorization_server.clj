@@ -1,30 +1,33 @@
 (ns cylon.oauth.impl.authorization-server
   (require
-   [com.stuartsierra.component :as component]
-   [clojure.tools.logging :refer :all]
-   [modular.bidi :refer (WebService)]
    [bidi.bidi :refer (path-for)]
-   [clojure.set :as set]
-   [hiccup.core :refer (html h)]
-   [schema.core :as s]
-   [plumbing.core :refer (<-)]
-   [clojure.string :as str]
-   [cylon.oauth.client-registry :refer (lookup-client+)]
-   [cylon.oauth.authorization :refer (AccessTokenAuthorizer authorized?)]
-   [cylon.authorization :refer (RequestAuthorizer request-authorized?)]
-   [cylon.authentication :refer (initiate-authentication-interaction get-outcome #_clean-resources!)]
-   [cylon.user :refer (verify-user)]
-   [cylon.totp :refer (OneTimePasswordStore get-totp-secret totp-token)]
-   [clj-time.core :refer (now plus days)]
    [cheshire.core :refer (encode)]
    [clj-jwt.core :refer (to-str sign jwt)]
-   [ring.middleware.params :refer (wrap-params)]
-   [ring.middleware.cookies :refer (cookies-request)]
-   [cylon.session :refer (session respond-with-new-session! assoc-session-data! respond-close-session!)]
+   [clj-time.core :refer (now plus days)]
+   [clojure.set :as set]
+   [clojure.string :as str]
+   [clojure.tools.logging :refer :all]
+   [com.stuartsierra.component :as component]
+   [cylon.authentication :refer (initiate-authentication-interaction get-outcome #_clean-resources!)]
+   [cylon.authorization :refer (RequestAuthorizer request-authorized?)]
+   [cylon.oauth.authorization :refer (AccessTokenAuthorizer authorized?)]
+   [cylon.oauth.client-registry :refer (lookup-client+)]
+   [cylon.oauth.encoding :refer (decode-scope encode-scope as-query-string)]
+   [cylon.session :refer (session respond-with-new-session! assoc-session-data! respond-close-session! wrap-require-session response-with-data-session)]
    [cylon.token-store :refer (create-token! get-token-by-id merge-token!)]
+   [cylon.totp :refer (OneTimePasswordStore get-totp-secret totp-token)]
+   [cylon.user :refer (verify-user)]
+   [cylon.util :refer (get-original-uri)]
+   [hiccup.core :refer (html h)]
+   [modular.bidi :refer (WebService)]
+   [plumbing.core :refer (<-)]
+   [ring.middleware.cookies :refer (cookies-request)]
    [ring.middleware.cookies :refer (wrap-cookies cookies-request cookies-response)]
+   [ring.middleware.params :refer (wrap-params)]
    [ring.util.response :refer (redirect)]
-   [cylon.oauth.encoding :refer (decode-scope encode-scope as-query-string)]))
+   [schema.core :as s]
+
+   ))
 
 (defprotocol OAuthUserAuthorizer
   (authenticated-user? [_ req])
@@ -109,6 +112,8 @@
 ;; -----------------------------------------------------
 ;; --------- records and constructors ------------------
 
+
+
 (defrecord AuthorizationServer [codes-store scopes iss session-store access-token-store authenticator ]
   WebService
   (request-handlers [component]
@@ -116,7 +121,7 @@
      ::authorization-endpoint
      (-> (fn [req]
            (debugf "OAuth2 authorization server: Authorizing request")
-
+           (println "original URI" (get-original-uri req))
            (if (authenticated-user? component req)
              (do
                ;; Authorizing by response-type
@@ -132,9 +137,10 @@
                    {:status 400
                     :body (format "Bad response_type parameter: '%s'" response-type)}
                    )))
-             (init-user-authentication component req)))
+             (apply response-with-data-session (init-user-authentication component req) )))
          wrap-params
-         wrap-schema-validation)
+         wrap-schema-validation
+         (wrap-require-session session-store false))
 
      ;; TODO Implement RFC 6749 4.1.2.1 Error Response
      ::permit
@@ -228,11 +234,6 @@
                   :body "Invalid request - unknown code"}))))
          wrap-params )
 
-     ::logout (fn [req]
-                 (->> (redirect "http://localhost:8010/logout")
-
-                      (respond-close-session! session-store req)))
-
      ::acceptance-step
      (fn [req]
        (let [{:keys [requested-scopes client-id]} (session session-store req)
@@ -250,6 +251,12 @@
                             [:p [:label {:for s} s] [:input {:type "checkbox" :id s :name s :value s :checked true}]]))
                         [:input {:type "submit"}]]
                        ])}))
+
+     ::logout (fn [req]
+                 (->> (redirect "http://localhost:8010/logout")
+
+                      (respond-close-session! session-store req)))
+
      })
 
   (routes [_]
@@ -297,13 +304,13 @@
     (let [{:keys [response session-state]}
           (initiate-authentication-interaction authenticator req {})]
 
-     (respond-with-new-session! session-store req
-      (merge {:client-id (-> req :query-params (get "client_id"))
-              :requested-scopes (decode-scope (-> req :query-params (get "scope")))
-              :state (-> req :query-params (get "state"))
-              :response-type  "code"} session-state)
-      response
-      )))
+
+      [response (merge {:client-id (-> req :query-params (get "client_id"))
+                :requested-scopes (decode-scope (-> req :query-params (get "scope")))
+                :state (-> req :query-params (get "state"))
+                :response-type  "code"} session-state)]
+
+      ))
 
   (align-client-server-state-value [{:keys [session-store]} req]
     (debugf (format "state session %s , state request %s"

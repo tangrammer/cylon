@@ -3,68 +3,93 @@
 
 (ns cylon.signup.signup
   (:require
-   [cylon.signup.protocols :refer (render-signup-form send-email render-email-verified render-reset-password Emailer render-welcome)]
    [clojure.tools.logging :refer :all]
-   [cylon.authentication :refer (InteractionStep get-location step-required?)]
-   [cylon.session :refer (session respond-with-new-session! assoc-session-data!)]
-   [cylon.token-store :refer (create-token! get-token-by-id purge-token!)]
-   [cylon.oauth.client-registry :refer (lookup-client+)]
    [com.stuartsierra.component :as component]
-   [modular.bidi :refer (WebService path-for)]
-   [hiccup.core :refer (html)]
-   [ring.middleware.params :refer (params-request)]
-   [ring.middleware.cookies :refer (cookies-response wrap-cookies)]
-   [ring.util.response :refer (response redirect)]
+   [cylon.authentication :refer (InteractionStep get-location step-required?)]
+   [cylon.oauth.client-registry :refer (lookup-client+)]
+   [cylon.oauth.impl.authorization-server :refer (init-user-authentication)]
+   [cylon.session :refer (session respond-with-new-session! assoc-session-data! wrap-require-session response-with-data-session)]
+   [cylon.signup.protocols :refer (render-signup-form send-email render-email-verified render-reset-password Emailer render-welcome)]
+   [cylon.token-store :refer (create-token! get-token-by-id purge-token!)]
+   [cylon.totp :refer (OneTimePasswordStore set-totp-secret get-totp-secret totp-token secret-key)]
    [cylon.user :refer (add-user! user-email-verified! find-user-by-email reset-password!)]
-   [cylon.totp :as totp]
-   [cylon.totp :refer (OneTimePasswordStore set-totp-secret)]
-   [cylon.totp :refer (OneTimePasswordStore get-totp-secret totp-token)]
-   [schema.core :as s ]))
+   [cylon.util :refer (absolute-uri)]
+
+   [hiccup.core :refer (html)]
+   [modular.bidi :refer (WebService path-for)]
+   [modular.bootstrap :refer (wrap-content-in-boilerplate)]
+   [ring.middleware.cookies :refer (cookies-response wrap-cookies)]
+   [ring.middleware.params :refer (params-request)]
+   [ring.util.response :refer (response redirect)]
+   [schema.core :as s ]
+   ))
 
 (defn make-verification-link [req target code email]
   (let [values  ((juxt (comp name :scheme) :server-name :server-port) req)
         verify-user-email-path (path-for req target)]
     (apply format "%s://%s:%d%s?code=%s&email=%s" (conj values verify-user-email-path code email))))
 
-(defn- post-signup-handler-fn  [{:keys [user-domain emailer verification-code-store session-store renderer]} req post-signup-session-update]
+(defn- post-signup-handler-fn  [{:keys [user-domain emailer verification-code-store session-store renderer]} req
+                                post-signup-session-update]
        (debugf "Processing signup")
-       (let [form (-> req params-request :form-params)
-             user-id (get form "user-id")
-             password (get form "password")
-             email (get form "email")
-             name (get form "name")
-             totp-secret (when (satisfies? OneTimePasswordStore user-domain)
-                           (totp/secret-key))]
+       )
 
-         ;; Add the user
-         (add-user! user-domain user-id password {:name name :email email})
 
-         ;; Add the totp-secret
-         (when (satisfies? OneTimePasswordStore user-domain)
-           (set-totp-secret user-domain user-id totp-secret))
+(defn signup-fn [{:keys [user-domain emailer verification-code-store session-store renderer client-registry]} redirection-fn]
+  (fn [req]
 
-         ;; Send the email to the user now!
-         (when emailer
-           ;; TODO Possibly we should encrypt and decrypt the verification-code (symmetric)
-           (let [code (str (java.util.UUID/randomUUID))]
-             (create-token! verification-code-store code {:email email :name name})
+           (let [form (-> req params-request :form-params)
+                 user-id (get form "user-id")
+                 password (get form "password")
+                 email (get form "email")
+                 name (get form "name")
+                 totp-secret (when (satisfies? OneTimePasswordStore user-domain)
+                               (secret-key))]
 
-             (send-email emailer email
-                         "Please give me access to beta"
-                         (format "Thanks for signing up. Please click on this link to verify your account: %s"
-                                 (make-verification-link req ::verify-user-email code email)))))
+             ;; Add the user
+             (add-user! user-domain user-id password {:name name :email email})
 
-         ;; Create a session that contains the secret-key
-         (let [data (merge {:cylon/subject-identifier user-id
-                            :name name}
-                           (when (satisfies? OneTimePasswordStore user-domain)
-                             {:totp-secret totp-secret})
-                           (when true ; authenticate on
-                             {:cylon/authenticated? true}))]
+             ;; Add the totp-secret
+             (when (satisfies? OneTimePasswordStore user-domain)
+               (set-totp-secret user-domain user-id totp-secret))
 
-           (post-signup-session-update data session-store req renderer)
+             ;; Send the email to the user now!
+             (when emailer
+               ;; TODO Possibly we should encrypt and decrypt the verification-code (symmetric)
+               (let [code (str (java.util.UUID/randomUUID))]
+                 (create-token! verification-code-store code {:email email :name name})
 
-           )))
+                 (send-email emailer email
+                             "Please give me access to beta"
+                             (format "Thanks for signing up. Please click on this link to verify your account: %s"
+                                     (make-verification-link req ::verify-user-email code email)))))
+
+             ;; Create a session that contains the secret-key
+             (let [data (merge {:cylon/subject-identifier user-id
+                                :name name}
+                               (when (satisfies? OneTimePasswordStore user-domain)
+                                 {:totp-secret totp-secret})
+                               (when true ; authenticate on
+                                 {:cylon/authenticated? true}))
+                   form (-> req params-request :form-params)]
+
+                                        ;(assoc-session-data! session-store req data)
+               (if-let  [client-id (get-in req [:session :client-id])]
+                 (response-with-data-session (response (render-welcome
+                                                        renderer req
+                                                        (merge
+                                                         {:session session
+                                                          :redirection-uri (:homepage-uri (lookup-client+ client-registry client-id))
+                                                          } form data)))
+                                             data)
+                 (response-with-data-session  (response (render-welcome
+                                                         renderer req
+                                                         (merge
+                                                          {:session session
+                                                           :redirection-uri (or (redirection-fn req) (path-for req ::authenticate))
+                                                           } form data)))
+                                              data))))))
+
 
 
 ;; I think the TOTP functionality could be made optional,
@@ -72,58 +97,64 @@
 ;; it. Strike the balance between unreasonable conditional logic and
 ;; code duplication.
 
-(defrecord SignupWithTotp [renderer session-store user-domain verification-code-store emailer fields fields-reset fields-confirm-password client-registry]
+(defrecord SignupWithTotp [renderer session-store user-domain verification-code-store emailer fields fields-reset fields-confirm-password client-registry boilerplate authorization-server]
   WebService
   (request-handlers [this]
-    {::GET-signup-form
-     (fn [req]
-       (let [resp (response (render-signup-form
-                             renderer req
-                             {:form {:method :post
-                                     :action (path-for req ::POST-signup-form)
-                                     :fields fields}}))]
-         (if-not (session session-store req)
-           ;; We create an empty session. This is because the POST
-           ;; handler requires that a session exists within which it can
-           ;; store the identity on a successful login
-           (respond-with-new-session! session-store req {} resp)
-           resp)))
+    {
+     ::GET-user-account
+     (->
+      (fn [req]
+        (println "authenticated?" (get-in req [:session :cylon/authenticated?]))
+        (if-not (get-in req [:session :cylon/authenticated?])
+          (response
+          (wrap-content-in-boilerplate (:boilerplate this)
+                                                 req [:div.row {:style "padding-top: 50px"}
+                                                      [:div.col-md-2]
+                                                      [:div.col-md-10
+                                                       [:h2  "welcome, Do you have an account?"]
+                                                       [:p.note  "Try to "
+                                                        [:a {:href
+                                                             (path-for req ::authenticate)}
+                                                         "login"]]]]))
+
+          (response (wrap-content-in-boilerplate boilerplate req
+                                                 [:div.row {:style "padding-top: 50px"}
+                                                  [:div.col-md-2]
+                                                  [:div.col-md-10
+                                                   [:h2  (str "welcome: " (or (get-in req [:session :cylon/subject-identifier])
+                                                                              (get-in req [:session :cylon/identity]))
+                                                              ", you're properly signed now")]]]))))
+      (wrap-require-session session-store false))
+
+     ::authenticate
+     (-> (fn [req]
+           (if-not (get-in req [:session  :cylon/authenticated?])
+             (apply response-with-data-session (init-user-authentication authorization-server req))
+             (redirect (path-for req ::GET-user-account))
+             ))
+         (wrap-require-session session-store false))
+
+     ::GET-signup-form
+     (-> (fn [req]
+           (let [resp (response (render-signup-form
+                              renderer req
+                              {:form {:method :post
+                                      :action (path-for req ::POST-signup-form)
+                                      :fields fields}}))]
+
+             resp))
+         (wrap-require-session session-store false))
 
      ::POST-signup-form
-     (fn [req]
-       (post-signup-handler-fn this req
-        (fn  [data session-store req renderer]
-          (let [session (session session-store req)
-                form (-> req params-request :form-params)]
-            (assoc-session-data! session-store req data)
-            (if-let  [client-id (:client-id session)]
-              (response (render-welcome
-                         renderer req
-                         (merge
-                          {:session session
-                           :redirection-uri (:homepage-uri (lookup-client+ client-registry client-id))
-                           } form data)))
-              (response (render-welcome
-                         renderer req
-                         (merge
-                          {:session session
-                           } form data))))))))
+     (->
+      (signup-fn this (fn [req] (get-in req [:session :redirection-uri])))
+      (wrap-require-session session-store true)
+         )
 
      ::POST-signup-form-directly
-     (fn [req]
-       (post-signup-handler-fn this req
-        (fn  [data session-store req renderer]
-          (let [
-                form (-> req params-request :form-params)
-                response (response (render-welcome
-                       renderer req
-                       (merge
-                         {:session (session session-store req)
-                          :redirection-uri "http://localhost:8010/devices"
-                          ;;(:redirection-uri (->> (:client-id session) (lookup-client+ (:client-registry this))))
-                          } form data)))]
-
-            (respond-with-new-session! session-store req data response)))))
+     (->> (signup-fn this (fn [req] "http://localhost:8010/devices"))
+          (wrap-require-session session-store false)
+          )
 
      ::verify-user-email
      (fn [req]
@@ -247,6 +278,8 @@
 
           "reset-password" {:get ::reset-password-form
                             :post ::process-reset-password}
+          "home" {:get ::GET-user-account}
+          "authenticate" {:get ::authenticate}
           }])
 
   (uri-context [this] "")
@@ -290,4 +323,4 @@
                 })
         (s/validate new-signup-with-totp-schema)
         map->SignupWithTotp)
-   [:user-domain :session-store :renderer :verification-code-store :client-registry]))
+   [:user-domain :session-store :renderer :verification-code-store :client-registry :boilerplate :authorization-server] ))
