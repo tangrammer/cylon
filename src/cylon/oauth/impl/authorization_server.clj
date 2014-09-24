@@ -283,7 +283,7 @@
   (request-authorized? [component request scope]
     (when-let [auth-header (get (:headers request) "authorization")]
       ;; Only match 'Bearer' tokens for now
-      (let [access-token (second (re-matches #"\QBearer\E\s+(.*)" auth-header))]
+      (when-let [access-token (second (re-matches #"\QBearer\E\s+(.*)" auth-header))]
         (authorized? component access-token scope))))
 
   OAuthUserAuthorizer

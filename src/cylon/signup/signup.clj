@@ -35,7 +35,6 @@
        (debugf "Processing signup")
        )
 
-
 (defn signup-fn [{:keys [user-domain emailer verification-code-store session-store renderer client-registry]} redirection-fn]
   (fn [req xess]
     (let [form (-> req params-request :form-params)
@@ -101,15 +100,15 @@
         (println "authenticated?" (-> (xession xess)  :cylon/authenticated?))
         (if-not (-> (xession xess) :cylon/authenticated?)
           (response
-          (wrap-content-in-boilerplate (:boilerplate this)
-                                       req [:div.row {:style "padding-top: 50px"}
-                                            [:div.col-md-2]
-                                            [:div.col-md-10
-                                             [:h2  "welcome, Do you have an account?"]
-                                             [:p.note  "Try to "
-                                              [:a {:href
-                                                   (path-for req ::authenticate)}
-                                               "login"]]]]))
+           (wrap-content-in-boilerplate (:boilerplate this)
+                                        req [:div.row {:style "padding-top: 50px"}
+                                             [:div.col-md-2]
+                                             [:div.col-md-10
+                                              [:h2  "welcome, Do you have an account?"]
+                                              [:p.note  "Try to "
+                                               [:a {:href
+                                                    (path-for req ::authenticate)}
+                                                "login"]]]]))
 
           (response
            (wrap-content-in-boilerplate boilerplate req
@@ -133,11 +132,11 @@
 
      ::GET-signup-form
      (-> (fn [req xess]
-          (response (render-signup-form
-                               renderer req
-                               {:form {:method :post
-                                       :action (path-for req ::POST-signup-form)
-                                       :fields fields}})))
+           (response (render-signup-form
+                      renderer req
+                      {:form {:method :post
+                              :action (path-for req ::POST-signup-form)
+                              :fields fields}})))
          (wrap-require-session-adv session-store false))
 
      ::POST-signup-form
@@ -167,7 +166,52 @@
 
          (response (render-email-verified renderer req {:message body :header "Verify user email"}))))
 
-     ::verify-user-email-reset-password
+
+     ::request-reset-password-form
+     (fn [req]
+       (let [form (-> req params-request :form-params)
+             email (get form "email")]
+         (if-let [user-by-mail (find-user-by-email user-domain email)]
+           (let [code (str (java.util.UUID/randomUUID))]
+             (create-token! verification-code-store code {:email email :name (:user user-by-mail)})
+
+             (send-email emailer email
+                         "Reset password confirmation step"
+                         (format "Please click on this link to reset your password account: %s"
+                                 (make-verification-link req ::verify-user-email-reset-password code email)))
+
+             (response
+              (render-simple-message
+               renderer req
+               {:header "Reset password"
+                :message (format "We've found your details and sent a password reset link to %s." email)
+                })))
+           {:status 200
+            :body (render-request-reset-password-form
+                   renderer req
+                   {:form {:method :post
+                           :action (path-for req ::process-reset-password)
+                           :fields fields-reset}
+                    :reset-status (format "No user with this mail %s in our db. Try again" email)})})))
+
+     ::process-reset-password-request
+     (fn [req]
+       (if-let [identity (:reset-code-identity (session session-store req))]
+
+         (let [form (-> req params-request :form-params)
+               pw (get form "new_pw")]
+
+           (purge-token! (:verification-code-store this) (:verification-code (session session-store req)))
+           (reset-password! user-domain identity pw)
+           (response (render-email-verified renderer req {:header "Reset Password Process"
+                                                          :message "You are like a hero, successful result"}))
+           )
+         {:status 200
+          :body "you shouldn't be here! :(  "}
+         )
+       )
+
+     ::reset-password-form
      (fn [req]
        (let [params (-> req params-request :params)
              body
@@ -180,12 +224,12 @@
 
                      ;; theoretically we reach to this step from login page so we have a server-session
                      (assoc-session-data! session-store req {:reset-code-identity (:name store) :verification-code code})
-                       {:status 200
-                        :body (render-reset-password
-                               renderer req
-                               {:form {:method :post
-                                       :action (path-for req ::confirm-password)
-                                       :fields fields-confirm-password}})})
+                     {:status 200
+                      :body (render-reset-password
+                             renderer req
+                             {:form {:method :post
+                                     :action (path-for req ::confirm-password)
+                                     :fields fields-confirm-password}})})
                    (format "Sorry but your session associated with this email '%s' seems to not be logic" email))
                  (format "Sorry but your session associated with this email '%s' seems to not be valid" email))
 
@@ -196,7 +240,7 @@
            body)))
 
 
-     ::reset-password-form
+     ::process-password-reset
      (fn [req]
        {:status 200
         :body (render-reset-password
@@ -205,60 +249,6 @@
                        :action (path-for req ::process-reset-password)
                        :fields fields-reset}})})
 
-     ::process-reset-password
-     (fn [req]
-       (let [form (-> req params-request :form-params)
-             email (get form "email")]
-         (if-let [user-by-mail (find-user-by-email user-domain email)]
-           (do
-             (let [code (str (java.util.UUID/randomUUID))]
-             (create-token! verification-code-store code {:email email :name (:user user-by-mail)})
-
-             (send-email emailer email
-                         "Reset password confirmation step"
-                         (format "Please click on this link to reset your password account: %s"
-                                 (make-verification-link req ::verify-user-email-reset-password code email)))
-
-             (response
-              (render-email-verified
-               renderer req
-               {:message (format "We've found in our db, thanks for reseting for this mail: %s.
- You'll recieve an email with confirmation link" email)
-                :header "Reset Password Process"} ))))
-           {:status 200
-            :body (render-reset-password
-                   renderer req
-                   {:form {:method :post
-                           :action (path-for req ::process-reset-password)
-                           :fields fields-reset}
-                    :reset-status (format "No user with this mail %s in our db. Try again" email)})})))
-
-     ::confirm-password
-     (fn [req]
-       (if-let [identity (:reset-code-identity (session session-store req))]
-
-         (let [form (-> req params-request :form-params)
-               pw (get form "new_pw")
-               pw-bis (get form "new_pw_bis")]
-           (if (= pw pw-bis)
-             (do
-               (purge-token! (:verification-code-store this) (:verification-code (session session-store req)))
-               (reset-password! user-domain identity pw)
-               (response (render-email-verified renderer req {:message "You are like a hero, successful result"
-                                                              :header "Reset Password Process"} )))
-             {:status 200
-              :body (render-reset-password
-                   renderer req
-                   {:form {:method :post
-                           :action (path-for req ::confirm-password)
-                           :fields fields-confirm-password}
-                    :reset-status "Your passwords aren't the same :( . Try again"})})
-           )
-         {:status 200
-          :body "you shouldn't be here! :(  "}
-         )
-       )
-
      })
 
   (routes [this]
@@ -266,11 +256,12 @@
                     :post ::POST-signup-form-directly}
           "signup_post" {:post ::POST-signup-form}
           "verify-email" {:get ::verify-user-email}
-          "verify-email-reset-pw" {:get ::verify-user-email-reset-password
-                                   :post ::confirm-password}
 
+          "request-reset-password" {:get ::request-reset-password-form
+                                    :post ::process-reset-password-request}
           "reset-password" {:get ::reset-password-form
-                            :post ::process-reset-password}
+                            :post ::process-password-reset}
+
           "home" {:get ::GET-user-account}
           "authenticate" {:get ::authenticate}
           }])
@@ -310,10 +301,8 @@
                 :fields-reset
                 [{:name "email" :label "Email" :placeholder "email"}]
                 :fields-confirm-password
-                [{:name "new_pw" :label "New Password" :password? true :placeholder "new password"}
-                 {:name "new_pw_bis" :label "Repeat New Password" :password? true :placeholder "repeat new password"}]
-
-                })
+                [{:name "new_pw" :label "New Password" :password? true :placeholder "new password"}]}
+               )
         (s/validate new-signup-with-totp-schema)
         map->SignupWithTotp)
-   [:user-domain :session-store :renderer :verification-code-store :client-registry :boilerplate :authorization-server] ))
+   [:user-domain :session-store :renderer :verification-code-store :client-registry :boilerplate :authorization-server]))

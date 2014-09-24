@@ -6,11 +6,11 @@
 (defprotocol WelcomeRenderer
   (render-welcome [_ req model]))
 
-(defprotocol EmailVerifiedRenderer
-  (render-email-verified [_ req model]))
+(defprotocol SimpleMessageRenderer
+  (render-simple-message [_ req model]))
 
-(defprotocol ResetPasswordRenderer
-  (render-reset-password [_ req model]))
+(defprotocol RequestResetPasswordFormRenderer
+  (render-request-reset-password-form [_ req model]))
 
 (defprotocol Emailer
   (send-email [_ email subject body]))
