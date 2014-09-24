@@ -21,3 +21,14 @@
     browser by setting the cookie with a 1970 expiry")
 
   #_(dissoc-data! [_ req key]))
+
+
+
+(defprotocol Xession
+  (xession [_]
+    "join temporary request with persistent data")
+  (is-new? [_]
+    "shorcut")
+  (assoc-xession-data! [_ m]
+    "inside a request, temporary")
+  (persist! [_ response]))

@@ -59,9 +59,42 @@
     (get (get-session-from-cookie request cookie-name session-store) k))
 
 
+(defn new-xession [req session-store]
+  (let [store (atom {})]
+    (reify p/Xession
+      (is-new? [this]
+        (empty? (p/xession this)))
+      (xession [_]
+        (merge @store (session session-store req)))
+      (assoc-xession-data! [_ data]
+        (swap! store merge data))
+      (persist! [this response]
+        (if-not (empty? @store)
+          (if (session session-store req)
+            (do
+              (reset! store {})
+              (assoc-session-data! session-store req @store)
+              response)
+            (let [res  (respond-with-new-session! session-store req @store response)]
+              (reset! store {})
+              res))
+          response)))))
+
+
+(defn wrap-require-session-adv
+  [handler-with-session session-store should-exist-session?]
+  (fn [req]
+    (let [xess (new-xession req session-store)]
+      (if (and (p/is-new? xess) should-exist-session?)
+        ;; TODO: it should be better to redirect to /home ???
+        (throw (Exception. (format "should exist-session in: %s"
+                                   (absolute-uri req))))
+        (let [response (handler-with-session req xess)]
+          (p/persist! xess response))))))
+
 
 (defn wrap-require-session
-  [h session-store should-exist-session?]
+  [handler session-store should-exist-session?]
   (fn [req]
     (let [session (session session-store req)]
       (if-not session
@@ -69,11 +102,11 @@
           ;; TODO: it should be better to redirect to /home ???
           (throw (Exception. (format "should exist-session in: %s"
                                      (absolute-uri req))))
-          (let [response (h req)
+          (let [response (handler req)
                 session-data (:cylon-session-data response)]
             (respond-with-new-session! session-store req (or session-data {}) response)))
         (let [req-with-session (assoc req :session session)
-              response (h req-with-session)]
+              response (handler req-with-session)]
           (when-let [session-data (:cylon-session-data response)]
             (assoc-session-data! session-store req session-data))
           response)))))

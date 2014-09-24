@@ -8,7 +8,8 @@
    [cylon.authentication :refer (InteractionStep get-location step-required?)]
    [cylon.oauth.client-registry :refer (lookup-client+)]
    [cylon.oauth.impl.authorization-server :refer (init-user-authentication)]
-   [cylon.session :refer (session respond-with-new-session! assoc-session-data! wrap-require-session response-with-data-session)]
+   [cylon.session :refer (session respond-with-new-session! assoc-session-data! wrap-require-session response-with-data-session wrap-require-session-adv)]
+   [cylon.session.protocols :refer (xession assoc-xession-data!)]
    [cylon.signup.protocols :refer (render-signup-form send-email render-email-verified render-reset-password Emailer render-welcome)]
    [cylon.token-store :refer (create-token! get-token-by-id purge-token!)]
    [cylon.totp :refer (OneTimePasswordStore set-totp-secret get-totp-secret totp-token secret-key)]
@@ -103,46 +104,47 @@
     {
      ::GET-user-account
      (->
-      (fn [req]
-        (println "authenticated?" (get-in req [:session :cylon/authenticated?]))
-        (if-not (get-in req [:session :cylon/authenticated?])
+      (fn [req xess]
+        (println "authenticated?" (-> (xession xess)  :cylon/authenticated?))
+        (if-not (-> (xession xess) :cylon/authenticated?)
           (response
           (wrap-content-in-boilerplate (:boilerplate this)
-                                                 req [:div.row {:style "padding-top: 50px"}
-                                                      [:div.col-md-2]
-                                                      [:div.col-md-10
-                                                       [:h2  "welcome, Do you have an account?"]
-                                                       [:p.note  "Try to "
-                                                        [:a {:href
-                                                             (path-for req ::authenticate)}
-                                                         "login"]]]]))
+                                       req [:div.row {:style "padding-top: 50px"}
+                                            [:div.col-md-2]
+                                            [:div.col-md-10
+                                             [:h2  "welcome, Do you have an account?"]
+                                             [:p.note  "Try to "
+                                              [:a {:href
+                                                   (path-for req ::authenticate)}
+                                               "login"]]]]))
 
-          (response (wrap-content-in-boilerplate boilerplate req
-                                                 [:div.row {:style "padding-top: 50px"}
-                                                  [:div.col-md-2]
-                                                  [:div.col-md-10
-                                                   [:h2  (str "welcome: " (or (get-in req [:session :cylon/subject-identifier])
-                                                                              (get-in req [:session :cylon/identity]))
-                                                              ", you're properly signed now")]]]))))
-      (wrap-require-session session-store false))
+          (response
+           (wrap-content-in-boilerplate boilerplate req
+                                        [:div.row {:style "padding-top: 50px"}
+                                         [:div.col-md-2]
+                                         [:div.col-md-10
+                                          [:h2  (str "welcome: " (or (-> (xession xess) :cylon/subject-identifier)
+                                                                     (-> (xession xess) :cylon/identity))
+                                                     ", you're properly signed now")]]]))))
+      (wrap-require-session-adv session-store false))
 
      ::authenticate
-     (-> (fn [req]
-           (if-not (get-in req [:session  :cylon/authenticated?])
-             (apply response-with-data-session (init-user-authentication authorization-server req))
+     (-> (fn [req xess]
+           (if-not (-> (xession xess) :cylon/authenticated?)
+             (let [[response sess-data] (init-user-authentication authorization-server req)]
+               (assoc-xession-data! xess sess-data)
+               response)
              (redirect (path-for req ::GET-user-account))
              ))
-         (wrap-require-session session-store false))
+         (wrap-require-session-adv session-store false))
 
      ::GET-signup-form
      (-> (fn [req]
-           (let [resp (response (render-signup-form
-                              renderer req
-                              {:form {:method :post
-                                      :action (path-for req ::POST-signup-form)
-                                      :fields fields}}))]
-
-             resp))
+          (response (render-signup-form
+                               renderer req
+                               {:form {:method :post
+                                       :action (path-for req ::POST-signup-form)
+                                       :fields fields}})))
          (wrap-require-session session-store false))
 
      ::POST-signup-form
