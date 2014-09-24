@@ -37,9 +37,8 @@
 
 
 (defn signup-fn [{:keys [user-domain emailer verification-code-store session-store renderer client-registry]} redirection-fn]
-  (fn [req]
-
-           (let [form (-> req params-request :form-params)
+  (fn [req xess]
+    (let [form (-> req params-request :form-params)
                  user-id (get form "user-id")
                  password (get form "password")
                  email (get form "email")
@@ -75,21 +74,15 @@
                    form (-> req params-request :form-params)]
 
                                         ;(assoc-session-data! session-store req data)
-               (if-let  [client-id (get-in req [:session :client-id])]
-                 (response-with-data-session (response (render-welcome
-                                                        renderer req
-                                                        (merge
-                                                         {:session session
-                                                          :redirection-uri (:homepage-uri (lookup-client+ client-registry client-id))
-                                                          } form data)))
-                                             data)
-                 (response-with-data-session  (response (render-welcome
-                                                         renderer req
-                                                         (merge
-                                                          {:session session
-                                                           :redirection-uri (or (redirection-fn req) (path-for req ::authenticate))
-                                                           } form data)))
-                                              data))))))
+               (assoc-xession-data! xess data)
+               (response (render-welcome
+                            renderer req
+                            (merge
+                             {:session session
+                              :redirection-uri (if-let  [client-id (-> (xession xess) :client-id)]
+                                                 (:homepage-uri (lookup-client+ client-registry client-id))
+                                                 (or (redirection-fn req xess) (path-for req ::authenticate)))}
+                             form data)))))))
 
 
 
@@ -139,24 +132,22 @@
          (wrap-require-session-adv session-store false))
 
      ::GET-signup-form
-     (-> (fn [req]
+     (-> (fn [req xess]
           (response (render-signup-form
                                renderer req
                                {:form {:method :post
                                        :action (path-for req ::POST-signup-form)
                                        :fields fields}})))
-         (wrap-require-session session-store false))
+         (wrap-require-session-adv session-store false))
 
      ::POST-signup-form
      (->
-      (signup-fn this (fn [req] (get-in req [:session :redirection-uri])))
-      (wrap-require-session session-store true)
-         )
+      (signup-fn this (fn [req xess] (-> (xession xess) :redirection-uri)))
+      (wrap-require-session-adv session-store true))
 
      ::POST-signup-form-directly
-     (->> (signup-fn this (fn [req] "http://localhost:8010/devices"))
-          (wrap-require-session session-store false)
-          )
+     (-> (signup-fn this (fn [req xess] "http://localhost:8010/devices"))
+         (wrap-require-session-adv session-store false))
 
      ::verify-user-email
      (fn [req]

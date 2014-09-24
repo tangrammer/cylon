@@ -69,16 +69,12 @@
       (assoc-xession-data! [_ data]
         (swap! store merge data))
       (persist! [this response]
-        (if-not (empty? @store)
-          (if (session session-store req)
-            (do
-              (reset! store {})
-              (assoc-session-data! session-store req @store)
-              response)
-            (let [res  (respond-with-new-session! session-store req @store response)]
-              (reset! store {})
-              res))
-          response)))))
+        (if (session session-store req)
+          (do
+            (assoc-session-data! session-store req @store)
+            response)
+          (respond-with-new-session! session-store req @store response))
+        ))))
 
 
 (defn wrap-require-session-adv

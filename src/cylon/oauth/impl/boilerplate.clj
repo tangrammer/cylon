@@ -133,7 +133,7 @@
   ContentBoilerplate
   (wrap-content-in-boilerplate [this req content]
     (let [session (session session-store req)
-          subject (:cylon/identity session)]
+          subject (or (:cylon/identity session) (:cylon/subject-identifier session))]
 
       (auth-base-page this req subject content)))
   )
