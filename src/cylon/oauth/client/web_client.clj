@@ -257,7 +257,7 @@
                      :redirection-uri s/Str
                      (s/optional-key :post-logout-redirect-uri) s/Str
 
-                     :required-scopes #{s/Keyword}
+                     :required-scopes (s/either #{s/Keyword} #{s/Str})
 
                      :authorize-uri s/Str
                      :access-token-uri s/Str
