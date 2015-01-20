@@ -221,6 +221,8 @@
                           (union (as-set scopes) ; OPTIONAL
                                  (:required-scopes this)))
                  "state" state          ; RECOMMENDED to prevent CSRF
+                 "redirect_uri" (:redirection-uri this)
+                 "include_granted_scopes" "true"
                  }))]
 
       (create-token! state-store state {})
