@@ -22,6 +22,7 @@
    [ring.middleware.params :refer (wrap-params)]
    [ring.util.response :refer (redirect)]
    [schema.core :as s]
+   [clojure.data.json :as json]
    ))
 
 (defrecord WebClient [access-token-uri
@@ -80,6 +81,7 @@
                 {:status 400 :body "Unexpected user state"}))
 
             (let [code (get params "code")
+                  scope* (get params "scope")
 
                   _ (infof "Exchanging code (%s) for access token via %s" code access-token-uri)
 
@@ -116,15 +118,26 @@
                             {"grant_type" "authorization_code"
                              "code" code
                              "client_id" (:client-id this)
-                             "client_secret" (:client-secret this)})}
+                             "client_secret" (:client-secret this)
+                             "redirect_uri" (:redirection-uri this)
+                             ;; google doesn't let to use here include_granted_scopes
+                             })}
 
                     ;; TODO Arguably we need better error handling here
                     #(if (:error %)
                        (do
                          (errorf "Failed to get token from %s, response was %s" access-token-uri %)
                          %)
-                       (update-in % [:body] (comp decode-stream io/reader))))]
-
+                       (do (clojure.pprint/pprint % )
+                           (println "------/// ")
+                           (println "scope*" scope*)
+                           (println "------/// ")
+                           (clojure.pprint/pprint (json/read-str (:body %)))
+                           #_(update-in % [:body] (comp decode-stream io/reader))
+                           (let [r (update-in % [:body] (fn [_] (merge (json/read-str (:body %)) {"scope" scope*})))]
+                             (clojure.pprint/pprint r)
+                             r
+                             ))))]
               (purge-token! state-store state)
 
               (if-let [error (:error at-resp)]
@@ -143,8 +156,9 @@
                         ;; requested (see 5.1)
                         scope (decode-scope (get (:body at-resp) "scope"))
 
-                        id-token (-> (get (:body at-resp) "id_token") str->jwt)]
-                    (if (verify id-token "secret")
+                        #_id-token #_(-> (get (:body at-resp) "id_token") str->jwt)
+                        id-token nil]
+                    (if true #_(verify id-token "secret")
                       (do
                         (assert original-uri (str "Failed to get original-uri from session " (session session-store req)))
 
