@@ -1,6 +1,6 @@
 ;; Copyright © 2014 JUXT LTD.
 
-(defproject cylon "0.5.0-SNAPSHOT"
+(defproject tangrammer/cylon "0.5.0-SNAPSHOT"
   :description "An integrated security system for applications built on component"
   :url "https://github.com/juxt/cylon"
   :license {:name "The MIT License"
@@ -17,6 +17,7 @@
                  ;; Required for OAuth2/OpenID-Connect support
                  [cheshire "5.3.1"]
                  [juxt.modular/http-kit "0.5.3"]
+                 [tangrammer/java-net-http-client "0.1.2-SNAPSHOT"]
                  [liberator "0.12.0"]
                  [clj-jwt "0.0.8"]
                  ]
