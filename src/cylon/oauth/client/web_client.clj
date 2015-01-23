@@ -152,6 +152,7 @@
 
                   (let [original-uri (:cylon/original-uri (session session-store req))
                         access-token (get (:body at-resp) "access_token")
+                        refresh-token (get (:body at-resp) "refresh_token")
 
                         ;; TODO If scope not there it is the same as
                         ;; requested (see 5.1)
@@ -169,6 +170,7 @@
 
                         (assoc-session-data!
                          session-store req {:cylon/access-token access-token
+                                            :cylon/refresh-token refresh-token
                                             :cylon/scopes scope
                                             :cylon/open-id (-> id-token :claims)
                                             :cylon/subject-identifier (-> id-token :claims :sub)})
@@ -238,6 +240,7 @@
                  "state" state          ; RECOMMENDED to prevent CSRF
                  "redirect_uri" (:redirection-uri this)
                  "include_granted_scopes" "true"
+                 "access_type" "offline"
                  }))]
 
       (create-token! state-store state {})
