@@ -8,8 +8,9 @@
    [clojure.set :refer (union)]
    [clojure.tools.logging :refer :all]
    [com.stuartsierra.component :as component]
+
    [cylon.authentication.protocols :refer (RequestAuthenticator)]
-   [cylon.oauth.client :refer (AccessTokenGrantee solicit-access-token expired?)]
+   [cylon.oauth.client :refer (AccessTokenGrantee solicit-access-token expired? refresh-token*)]
    [cylon.oauth.registry :refer (register-client)]
    [cylon.oauth.registry.protocols :refer (ClientRegistry)]
    [cylon.oauth.encoding :refer (encode-scope decode-scope)]
@@ -24,28 +25,12 @@
    [ring.util.response :refer (redirect)]
    [schema.core :as s]
    [clojure.data.json :as json]
-   ))
+
+   )
+  (:import [cylon.oauth.client HttpException]))
 
 
 
-
-(defn http-request-form [method url params-map]
-  (println params-map)
-  @(http-request
-    {:method method
-     :url url
-     :headers {"content-type" "application/x-www-form-urlencoded"}
-     :body (as-www-form-urlencoded params-map)}
-
-    ;; TODO Arguably we need better error handling here
-    #(if (:error %)
-       (do
-         (errorf "Failed to get token from %s, response was %s" url %)
-         %)
-       (do
-         (update-in % [:body] (fn [_] (json/read-str (:body %)))))))
-
-  )
 
 
 (defrecord WebClient [access-token-uri
@@ -279,31 +264,18 @@
   (expired? [_ req access-token] (println "expired?????????=> now returning true") false)
 
   (refresh-access-token [this req]
-
     (println " ******* Initiate a process (typically via a HTTP redirect) that will result
     in a new request being made with an access token, if possible.")
     (let [original-uri (absolute-uri req)
-          at-resp (http-request-form :post access-token-uri {"grant_type" "refresh_token"
-                                                             "refresh_token" (:cylon/refresh-token (session session-store req))
-                                                             "client_id" (:client-id this)
-                                                             "client_secret" (:client-secret this)})]
-      (if-let [error (:error at-resp)]
-        {:status 403
-         :body (format "Something went wrong: status of underlying request, error was %s" error)}
+          refresh-token (session session-store req)]
+      (try
+        (let [access-token (refresh-token* access-token-uri (:client-id this) (:client-secret this) (:cylon/refresh-token refresh-token))]
+          (assoc-session-data! session-store req {:cylon/access-token access-token})
+          (redirect original-uri))
+        (catch Exception e
+          (when(instance? HttpException e)
+            (select-keys e :status :body))))))
 
-        (if (not= (:status at-resp) 200)
-          {:status 403
-           :body (format "Something went wrong: status of underlying request %s" (:status at-resp))}
-          (let [
-                access-token (get (:body at-resp) "access_token")]
-            (if true
-              (do
-                (assoc-session-data!
-                 session-store req {:cylon/access-token access-token})
-                (redirect original-uri)))))))
-
-
-    )
 
   RequestAuthenticator
   (authenticate [component request]
