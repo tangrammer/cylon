@@ -37,7 +37,9 @@
   (fn [req]
     (let [{access-token :cylon/access-token
            scopes :cylon/scopes
-           sub :cylon/subject-identifier}
+           sub :cylon/subject-identifier
+           refresh-token :cylon/refresh-token}
+
           (authenticate client req)]
 
       (cond
@@ -60,7 +62,8 @@
        :otherwise
        (h (assoc req
             :cylon/subject-identifier sub
-            :cylon/access-token access-token))))))
+            :cylon/access-token access-token
+            :cylon/refresh-token refresh-token))))))
 
 
 (defn http-request-form [method url params-map headers-map]
